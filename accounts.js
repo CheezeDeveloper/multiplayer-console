@@ -43,8 +43,6 @@ async function nicknameTaken(nickname, excludeId = null) {
     return true;
 }
 
-// Creates an account. Returns null if the name is already taken
-// (either caught in advance or via the DB unique constraint race-condition safety net).
 async function createAccount(ip, nickname) {
     try {
         const res = await db.query(
@@ -54,7 +52,7 @@ async function createAccount(ip, nickname) {
         );
         return rowToAccount(res.rows[0]);
     } catch (err) {
-        if (err.code === '23505') return null; // unique_violation
+        if (err.code === '23505') return null;
         throw err;
     }
 }
@@ -74,7 +72,10 @@ async function updateNickname(accountId, newNickname) {
 }
 
 async function setPassword(accountId, hash) {
-    await db.query('UPDATE accounts SET password_hash = $1 WHERE id = $2', [hash, accountId]);
+    await db.query(
+        'UPDATE accounts SET password_hash = $1 WHERE id = $2',
+        [hash, accountId]
+    );
     return true;
 }
 
@@ -83,14 +84,35 @@ async function removePassword(accountId) {
 }
 
 async function setSiteAdmin(accountId, value) {
-    await db.query('UPDATE accounts SET is_site_admin = $1 WHERE id = $2', [value, accountId]);
+    await db.query(
+        'UPDATE accounts SET is_site_admin = $1 WHERE id = $2',
+        [value, accountId]
+    );
 }
 
 async function setGlobalBan(accountId, value) {
-    await db.query('UPDATE accounts SET is_banned = $1 WHERE id = $2', [value, accountId]);
+    await db.query(
+        'UPDATE accounts SET is_banned = $1 WHERE id = $2',
+        [value, accountId]
+    );
 }
 
-// Generates a guest name guaranteed not to collide with any existing account.
+// NEW: Reassigns an IP address to belong to this account.
+// Strips the IP from any other account that was previously
+// associated with it, so future connections from this IP
+// always resolve back to THIS account instead of a stale guest.
+async function reassignIp(accountId, ip) {
+    if (!ip) return;
+    await db.query(
+        'UPDATE accounts SET ip = NULL WHERE ip = $1 AND id != $2',
+        [ip, accountId]
+    );
+    await db.query(
+        'UPDATE accounts SET ip = $1 WHERE id = $2',
+        [ip, accountId]
+    );
+}
+
 async function generateUniqueGuestName() {
     let attempt;
     let exists = true;
@@ -102,8 +124,6 @@ async function generateUniqueGuestName() {
     return attempt;
 }
 
-// Called once at boot. Ensures the designated site admin account exists,
-// is flagged correctly, and has an initial password if none is set yet.
 async function ensureSiteAdminSeed() {
     const username = process.env.ADMIN_USERNAME || 'codexll34';
     const password = process.env.ADMIN_PASSWORD || null;
@@ -113,7 +133,7 @@ async function ensureSiteAdminSeed() {
     if (!account) {
         account = await createAccount(null, username);
         if (!account) {
-            console.error(`[SEED] Could not create site admin account "${username}" — name conflict.`);
+            console.error(`[SEED] Could not create site admin account "${username}".`);
             return;
         }
         console.log(`[SEED] Created site admin account: ${username}`);
@@ -126,7 +146,7 @@ async function ensureSiteAdminSeed() {
 
     if (!account.passwordHash && password) {
         await setPassword(account.id, hashPassword(password));
-        console.log(`[SEED] Initial password set for ${username} from ADMIN_PASSWORD.`);
+        console.log(`[SEED] Initial password set for ${username}.`);
     }
 }
 
@@ -141,6 +161,7 @@ module.exports = {
     removePassword,
     setSiteAdmin,
     setGlobalBan,
+    reassignIp,
     generateUniqueGuestName,
     ensureSiteAdminSeed,
 };
