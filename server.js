@@ -1,454 +1,167 @@
-const express = require('express');
-const path = require('path');
-const http = require('http');
-const WebSocket = require('ws');
-
 const db = require('./db');
-const { createRoom, getRoom, getRoomSync, listRooms } = require('./rooms');
-const { processCommand, leaveCurrentRoom, getTimestamp } = require('./commands');
-const accounts = require('./accounts');
-const { hashPassword, verifyPassword } = require('./crypto-utils');
+const { hashPassword } = require('./crypto-utils');
 
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-app.use(express.static(path.join(__dirname, 'public')));
-
-const clients = new Map();
-let clientCounter = 0;
-
-function send(ws, text, cls = '') {
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'line', text, cls }));
-    }
-}
-
-function sendPrompt(client) {
-    const promptText = client.room ? `C:\\CHAT\\${client.room}>` : `C:\\CHAT>`;
-    if (client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(JSON.stringify({ type: 'prompt', text: promptText }));
-    }
-}
-
-function sendCustomPrompt(client, text) {
-    if (client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(JSON.stringify({ type: 'prompt', text }));
-    }
-}
-
-function sendClear(client) {
-    if (client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(JSON.stringify({ type: 'clear' }));
-    }
-}
-
-function setAuthMode(client, enabled) {
-    if (client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(JSON.stringify({ type: 'authmode', enabled }));
-    }
-}
-
-function findClientById(sessionId) {
-    for (const c of clients.values()) {
-        if (c.id === sessionId) return c;
-    }
-    return null;
-}
-
-function findClientByAccountId(accountId) {
-    for (const c of clients.values()) {
-        if (c.loggedInAccountId === accountId) return c;
-    }
-    return null;
-}
-
-function broadcastToRoom(roomName, text, cls = '', excludeSessionId = null) {
-    const room = getRoomSync(roomName);
-    if (!room) return;
-    for (const sessionId of room.users.keys()) {
-        if (sessionId === excludeSessionId) continue;
-        const target = findClientById(sessionId);
-        if (target) send(target.ws, text, cls);
-    }
-}
-
-function broadcastChatMessage(roomName, senderSessionId, nickname, text) {
-    const room = getRoomSync(roomName);
-    if (!room) return;
-    const timeStr = getTimestamp();
-    for (const sessionId of room.users.keys()) {
-        const target = findClientById(sessionId);
-        if (!target) continue;
-        const isSender = sessionId === senderSessionId;
-        const displayName = isSender ? 'YOU' : nickname;
-        const cls = isSender ? 'bright' : '';
-        send(target.ws, `${timeStr} ${displayName.padEnd(11).slice(0, 11)}${text}`, cls);
-    }
-}
-
-function broadcastGlobal(text, cls = '') {
-    for (const c of clients.values()) {
-        send(c.ws, text, cls);
-    }
-}
-
-function buildContext(ts) {
+function rowToAccount(row) {
+    if (!row) return null;
     return {
-        send, sendPrompt, sendClear, broadcastToRoom, broadcastGlobal,
-        createRoom, getRoom, listRooms,
-        findClientById, findClientByAccountId, ts,
-        findAccountById: accounts.findAccountById,
-        findAccountByNickname: accounts.findAccountByNickname,
-        nicknameTaken: accounts.nicknameTaken,
-        updateNickname: accounts.updateNickname,
-        setPassword: accounts.setPassword,
-        removePassword: accounts.removePassword,
-        setGlobalBan: accounts.setGlobalBan,
-        hashPassword, verifyPassword,
-        leaveCurrentRoom,
+        id: row.id,
+        nickname: row.nickname,
+        ip: row.ip,
+        passwordHash: row.password_hash,
+        isSiteAdmin: row.is_site_admin,
+        isBanned: row.is_banned,
+        createdAt: row.created_at,
     };
 }
 
-async function generateUniqueSessionGuestName() {
-    let name;
-    let inUse = true;
-    while (inUse) {
-        name = await accounts.generateUniqueGuestName();
-        inUse = false;
-        for (const c of clients.values()) {
-            if (c.nickname && c.nickname.toLowerCase() === name.toLowerCase()) {
-                inUse = true;
-                break;
-            }
-        }
-    }
-    return name;
+async function findAccountByIp(ip) {
+    if (!ip) return null;
+    const res = await db.query(
+        'SELECT * FROM accounts WHERE ip = $1 ORDER BY id ASC LIMIT 1',
+        [ip]
+    );
+    return rowToAccount(res.rows[0]);
 }
 
-wss.on('connection', async (ws, req) => {
-    clientCounter++;
-    const sessionId = `s${clientCounter}_${Date.now()}`;
-    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'UNKNOWN')
-        .split(',')[0].trim();
+async function findAccountById(id) {
+    const res = await db.query('SELECT * FROM accounts WHERE id = $1', [id]);
+    return rowToAccount(res.rows[0]);
+}
 
-    const clientData = {
-        id: sessionId,
-        ws,
-        ip,
-        nickname: null,
-        room: null,
-        isAdmin: false,
-        isSiteAdmin: false,
-        loggedInAccountId: null,
-        pendingAccount: null,
-        loginAttemptUsername: null,
-        authState: 'ready',
-    };
+async function findAccountByNickname(nickname) {
+    const res = await db.query(
+        'SELECT * FROM accounts WHERE nickname_lower = $1',
+        [nickname.toLowerCase()]
+    );
+    return rowToAccount(res.rows[0]);
+}
 
-    clients.set(ws, clientData);
+async function nicknameTaken(nickname, excludeId = null) {
+    const account = await findAccountByNickname(nickname);
+    if (!account) return false;
+    if (excludeId && account.id === excludeId) return false;
+    return true;
+}
 
-    function printBanner() {
-        send(ws, 'Microsoft(R) MS-DOS(R) Version 6.30', '');
-        send(ws, '         (C)Copyright Microsoft Corp 1981-1995.', '');
-        send(ws, '', '');
-    }
-
-    function printFooter() {
-        send(ws, 'Type "connect /find" to browse available rooms.', '');
-        send(ws, 'Type "connect /server=NAME" to join a specific room.', '');
-        send(ws, 'Type "connect create /server=NAME" to create your own room.', '');
-        send(ws, '/help for a full command list.', '');
-        send(ws, '', '');
-    }
-
+async function createAccount(ip, nickname) {
     try {
-        let account = await accounts.findAccountByIp(ip);
-
-        if (account && account.isBanned) {
-            printBanner();
-            send(ws, '[SYSTEM] This connection has been banned from the site.', 'error');
-            ws.close();
-            return;
-        }
-
-        if (!account) {
-            const guestName = await generateUniqueSessionGuestName();
-            account = await accounts.createAccount(ip, guestName);
-
-            if (!account) {
-                clientData.nickname = await generateUniqueSessionGuestName();
-                printBanner();
-                send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
-                send(ws, '', '');
-                printFooter();
-                sendPrompt(clientData);
-            } else {
-                clientData.loggedInAccountId = account.id;
-                clientData.nickname = account.nickname;
-                clientData.isSiteAdmin = account.isSiteAdmin;
-
-                printBanner();
-                send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
-                send(ws, 'MPCMD.EXE loaded successfully.', '');
-                send(ws, '', '');
-                send(ws, `[SYSTEM] New account created: ${account.nickname}`, 'bright');
-                send(ws, `[SYSTEM] Use /nick <name> to set a permanent nickname.`, '');
-                send(ws, `[SYSTEM] Use /password add <password> to secure your account.`, '');
-                send(ws, '', '');
-                printFooter();
-                sendPrompt(clientData);
-            }
-
-        } else if (account.passwordHash) {
-            clientData.pendingAccount = account;
-            clientData.authState = 'awaiting_password';
-            clientData.nickname = await generateUniqueSessionGuestName();
-
-            printBanner();
-            send(ws, `[SYSTEM] Account recognised: ${account.nickname}`, 'bright');
-            send(ws, `[SYSTEM] Enter password to login, or type /guest to continue as a guest.`, '');
-            send(ws, '', '');
-            setAuthMode(clientData, true);
-
-        } else {
-            clientData.loggedInAccountId = account.id;
-            clientData.nickname = account.nickname;
-            clientData.isSiteAdmin = account.isSiteAdmin;
-
-            printBanner();
-            send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
-            send(ws, '', '');
-            send(ws, `[SYSTEM] Welcome back, ${account.nickname}.`, 'bright');
-            send(ws, '', '');
-            printFooter();
-            sendPrompt(clientData);
-        }
-
+        const res = await db.query(
+            `INSERT INTO accounts (nickname, nickname_lower, ip)
+             VALUES ($1, $2, $3) RETURNING *`,
+            [nickname, nickname.toLowerCase(), ip]
+        );
+        return rowToAccount(res.rows[0]);
     } catch (err) {
-        console.error('Error during connection setup:', err);
-        send(ws, '[SYSTEM] An error occurred during connection setup.', 'error');
-        ws.close();
-        return;
+        if (err.code === '23505') return null;
+        throw err;
     }
+}
 
-    ws.on('message', async (raw) => {
-        let data;
-        try { data = JSON.parse(raw); } catch (e) { return; }
-        if (data.type !== 'input') return;
-        const text = (data.text || '').toString().trim();
-        if (!text) return;
+async function updateNickname(accountId, newNickname) {
+    try {
+        const res = await db.query(
+            `UPDATE accounts SET nickname = $1, nickname_lower = $2
+             WHERE id = $3 RETURNING *`,
+            [newNickname, newNickname.toLowerCase(), accountId]
+        );
+        return rowToAccount(res.rows[0]);
+    } catch (err) {
+        if (err.code === '23505') return null;
+        throw err;
+    }
+}
 
-        try {
-            await handleInput(clientData, text, data.ts || Date.now());
-        } catch (err) {
-            console.error('Error handling input:', err);
-            send(clientData.ws, '[SYSTEM] An internal error occurred.', 'error');
-        }
-    });
+async function setPassword(accountId, hash) {
+    await db.query(
+        'UPDATE accounts SET password_hash = $1 WHERE id = $2',
+        [hash, accountId]
+    );
+    return true;
+}
 
-    ws.on('close', async () => {
-        try {
-            if (clientData.room) {
-                await leaveCurrentRoom(clientData, buildContext(Date.now()));
-            }
-        } catch (err) {
-            console.error('Error during disconnect cleanup:', err);
-        }
-        clients.delete(ws);
-    });
-});
+async function removePassword(accountId) {
+    return setPassword(accountId, null);
+}
 
-async function attemptLogin(client, username, password) {
-    const account = await accounts.findAccountByNickname(username);
+async function setSiteAdmin(accountId, value) {
+    await db.query(
+        'UPDATE accounts SET is_site_admin = $1 WHERE id = $2',
+        [value, accountId]
+    );
+}
+
+async function setGlobalBan(accountId, value) {
+    await db.query(
+        'UPDATE accounts SET is_banned = $1 WHERE id = $2',
+        [value, accountId]
+    );
+}
+
+// NEW: Reassigns an IP address to belong to this account.
+// Strips the IP from any other account that was previously
+// associated with it, so future connections from this IP
+// always resolve back to THIS account instead of a stale guest.
+async function reassignIp(accountId, ip) {
+    if (!ip) return;
+    await db.query(
+        'UPDATE accounts SET ip = NULL WHERE ip = $1 AND id != $2',
+        [ip, accountId]
+    );
+    await db.query(
+        'UPDATE accounts SET ip = $1 WHERE id = $2',
+        [ip, accountId]
+    );
+}
+
+async function generateUniqueGuestName() {
+    let attempt;
+    let exists = true;
+    while (exists) {
+        const num = Math.floor(1000 + Math.random() * 9000);
+        attempt = `GUEST${num}`;
+        exists = await nicknameTaken(attempt);
+    }
+    return attempt;
+}
+
+async function ensureSiteAdminSeed() {
+    const username = process.env.ADMIN_USERNAME || 'codexll34';
+    const password = process.env.ADMIN_PASSWORD || null;
+
+    let account = await findAccountByNickname(username);
 
     if (!account) {
-        send(client.ws, `No account found with the name "${username}".`, 'error');
-        sendPrompt(client);
-        return;
-    }
-    if (account.isBanned) {
-        send(client.ws, `This account has been banned from the site.`, 'error');
-        sendPrompt(client);
-        return;
-    }
-    if (!account.passwordHash) {
-        send(client.ws, `That account has no password set and cannot be logged into remotely.`, 'error');
-        send(client.ws, `Connect from the original IP address instead.`, '');
-        sendPrompt(client);
-        return;
-    }
-    if (!verifyPassword(password, account.passwordHash)) {
-        send(client.ws, `Incorrect password.`, 'error');
-        sendPrompt(client);
-        return;
-    }
-
-    if (client.room) {
-        await leaveCurrentRoom(client, buildContext(Date.now()));
-    }
-
-    client.loggedInAccountId = account.id;
-    client.nickname = account.nickname;
-    client.isSiteAdmin = account.isSiteAdmin;
-
-    send(client.ws, '', '');
-    send(client.ws, `[SYSTEM] Login successful. Welcome, ${account.nickname}.`, 'bright');
-    if (account.isSiteAdmin) {
-        send(client.ws, `[SYSTEM] Site administrator privileges active.`, 'warn');
-    }
-    send(client.ws, '', '');
-    sendPrompt(client);
-}
-
-async function handleLogout(client) {
-    if (!client.loggedInAccountId) {
-        send(client.ws, 'You are not logged into any account.', 'error');
-        return;
-    }
-    const oldNick = client.nickname;
-
-    if (client.room) {
-        await leaveCurrentRoom(client, buildContext(Date.now()));
-    }
-
-    client.loggedInAccountId = null;
-    client.isSiteAdmin = false;
-    client.nickname = await generateUniqueSessionGuestName();
-
-    send(client.ws, '', '');
-    send(client.ws, `[SYSTEM] Logged out of ${oldNick}.`, 'bright');
-    send(client.ws, `[SYSTEM] Continuing as guest: ${client.nickname}`, '');
-    send(client.ws, '', '');
-    sendPrompt(client);
-}
-
-async function handleInput(client, text, ts) {
-
-    // ---- Auth: IP-recognised account with password ----
-    if (client.authState === 'awaiting_password') {
-        if (text.toLowerCase() === '/guest') {
-            client.authState = 'ready';
-            client.pendingAccount = null;
-            setAuthMode(client, false);
-            send(client.ws, `[SYSTEM] Continuing as guest: ${client.nickname}`, 'bright');
-            send(client.ws, '', '');
-            sendPrompt(client);
+        account = await createAccount(null, username);
+        if (!account) {
+            console.error(`[SEED] Could not create site admin account "${username}".`);
             return;
         }
-
-        const account = client.pendingAccount;
-        if (verifyPassword(text, account.passwordHash)) {
-            client.authState = 'ready';
-            client.loggedInAccountId = account.id;
-            client.nickname = account.nickname;
-            client.isSiteAdmin = account.isSiteAdmin;
-            client.pendingAccount = null;
-            setAuthMode(client, false);
-            send(client.ws, `[SYSTEM] Login successful. Welcome back, ${account.nickname}.`, 'bright');
-            if (account.isSiteAdmin) {
-                send(client.ws, `[SYSTEM] Site administrator privileges active.`, 'warn');
-            }
-            send(client.ws, '', '');
-            sendPrompt(client);
-        } else {
-            send(client.ws, 'Incorrect password. Try again, or type /guest to continue as a guest.', 'error');
-        }
-        return;
+        console.log(`[SEED] Created site admin account: ${username}`);
     }
 
-    // ---- Guided /login step 1: waiting for username ----
-    if (client.authState === 'login_awaiting_username') {
-        client.loginAttemptUsername = text;
-        client.authState = 'login_awaiting_password';
-        setAuthMode(client, true);
-        return;
+    if (!account.isSiteAdmin) {
+        await setSiteAdmin(account.id, true);
+        console.log(`[SEED] Flagged ${username} as site admin.`);
     }
 
-    // ---- Guided /login step 2: waiting for password ----
-    if (client.authState === 'login_awaiting_password') {
-        const username = client.loginAttemptUsername;
-        client.loginAttemptUsername = null;
-        client.authState = 'ready';
-        setAuthMode(client, false);
-        await attemptLogin(client, username, text);
-        return;
-    }
-
-    const trimmedLower = text.toLowerCase();
-
-    // ---- /login (guided, no args) ----
-    if (trimmedLower === '/login') {
-        client.authState = 'login_awaiting_username';
-        send(client.ws, '', '');
-        send(client.ws, 'Enter the account nickname you wish to log into:', '');
-        sendCustomPrompt(client, 'Username: ');
-        return;
-    }
-
-    // ---- /login username password (inline) ----
-    if (trimmedLower.startsWith('/login ')) {
-        const args = text.split(/\s+/).slice(1);
-        if (args.length < 2) {
-            send(client.ws, 'Usage: /login <username> <password>', 'error');
-            send(client.ws, 'Or just type /login for a guided prompt.', '');
-            return;
-        }
-        const promptStr = client.room ? `C:\\CHAT\\${client.room}>` : `C:\\CHAT>`;
-        send(client.ws, `${promptStr}/login ${args[0]} ********`, '');
-        await attemptLogin(client, args[0], args.slice(1).join(' '));
-        return;
-    }
-
-    // ---- /logout ----
-    if (trimmedLower === '/logout') {
-        const promptStr = client.room ? `C:\\CHAT\\${client.room}>` : `C:\\CHAT>`;
-        send(client.ws, `${promptStr}${text}`, '');
-        await handleLogout(client);
-        return;
-    }
-
-    const isCommand = text.startsWith('/') || trimmedLower.startsWith('connect');
-
-    if (isCommand) {
-        const promptStr = client.room ? `C:\\CHAT\\${client.room}>` : `C:\\CHAT>`;
-        send(client.ws, `${promptStr}${text}`, '');
-        await processCommand(client, text, buildContext(ts));
-    } else {
-        if (!client.room) {
-            send(client.ws, 'Not connected to any server. Type "connect /find" first.', 'error');
-            return;
-        }
-
-        const room = getRoomSync(client.room);
-        if (!room) {
-            send(client.ws, 'Room no longer exists.', 'error');
-            client.room = null;
-            sendPrompt(client);
-            return;
-        }
-
-        const userInfo = room.users.get(client.id);
-        if (userInfo && userInfo.muted) {
-            send(client.ws, 'You are muted and cannot send messages.', 'error');
-            return;
-        }
-
-        broadcastChatMessage(client.room, client.id, client.nickname, text);
+    if (!account.passwordHash && password) {
+        await setPassword(account.id, hashPassword(password));
+        console.log(`[SEED] Initial password set for ${username}.`);
     }
 }
 
-const PORT = process.env.PORT || 3000;
-
-(async () => {
-    try {
-        await db.init();
-        await accounts.ensureSiteAdminSeed();
-        server.listen(PORT, () => {
-            console.log(`Multiplayer Console server running on port ${PORT}`);
-        });
-    } catch (err) {
-        console.error('Failed to start server:', err);
-        process.exit(1);
-    }
-})();
+module.exports = {
+    findAccountByIp,
+    findAccountById,
+    findAccountByNickname,
+    nicknameTaken,
+    createAccount,
+    updateNickname,
+    setPassword,
+    removePassword,
+    setSiteAdmin,
+    setGlobalBan,
+    reassignIp,
+    generateUniqueGuestName,
+    ensureSiteAdminSeed,
+};
