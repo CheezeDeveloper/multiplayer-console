@@ -117,7 +117,7 @@ async function generateUniqueSessionGuestName() {
         name = await accounts.generateUniqueGuestName();
         inUse = false;
         for (const c of clients.values()) {
-            if (c.nickname.toLowerCase() === name.toLowerCase()) {
+            if (c.nickname && c.nickname.toLowerCase() === name.toLowerCase()) {
                 inUse = true;
                 break;
             }
@@ -162,27 +162,55 @@ wss.on('connection', async (ws, req) => {
         send(ws, '', '');
     }
 
-    let account = await accounts.findAccountByIp(ip);
+    try {
+        let account = await accounts.findAccountByIp(ip);
 
-    if (account && account.isBanned) {
-        printBanner();
-        send(ws, '[SYSTEM] This connection has been banned from the site.', 'error');
-        ws.close();
-        return;
-    }
-
-    if (!account) {
-        const guestName = await generateUniqueSessionGuestName();
-        account = await accounts.createAccount(ip, guestName);
+        if (account && account.isBanned) {
+            printBanner();
+            send(ws, '[SYSTEM] This connection has been banned from the site.', 'error');
+            ws.close();
+            return;
+        }
 
         if (!account) {
-            // Extremely rare race — just proceed as a pure session guest
+            const guestName = await generateUniqueSessionGuestName();
+            account = await accounts.createAccount(ip, guestName);
+
+            if (!account) {
+                clientData.nickname = await generateUniqueSessionGuestName();
+                printBanner();
+                send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
+                send(ws, '', '');
+                printFooter();
+                sendPrompt(clientData);
+            } else {
+                clientData.loggedInAccountId = account.id;
+                clientData.nickname = account.nickname;
+                clientData.isSiteAdmin = account.isSiteAdmin;
+
+                printBanner();
+                send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
+                send(ws, 'MPCMD.EXE loaded successfully.', '');
+                send(ws, '', '');
+                send(ws, `[SYSTEM] New account created: ${account.nickname}`, 'bright');
+                send(ws, `[SYSTEM] Use /nick <name> to set a permanent nickname.`, '');
+                send(ws, `[SYSTEM] Use /password add <password> to secure your account.`, '');
+                send(ws, '', '');
+                printFooter();
+                sendPrompt(clientData);
+            }
+
+        } else if (account.passwordHash) {
+            clientData.pendingAccount = account;
+            clientData.authState = 'awaiting_password';
             clientData.nickname = await generateUniqueSessionGuestName();
+
             printBanner();
-            send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
+            send(ws, `[SYSTEM] Account recognised: ${account.nickname}`, 'bright');
+            send(ws, `[SYSTEM] Enter password to login, or type /guest to continue as a guest.`, '');
             send(ws, '', '');
-            printFooter();
-            sendPrompt(clientData);
+            setAuthMode(clientData, true);
+
         } else {
             clientData.loggedInAccountId = account.id;
             clientData.nickname = account.nickname;
@@ -190,39 +218,18 @@ wss.on('connection', async (ws, req) => {
 
             printBanner();
             send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
-            send(ws, 'MPCMD.EXE loaded successfully.', '');
             send(ws, '', '');
-            send(ws, `[SYSTEM] New account registered for this connection: ${account.nickname}`, 'bright');
-            send(ws, `[SYSTEM] Use /nick <name> to set a permanent nickname.`, '');
-            send(ws, `[SYSTEM] Use /password add <password> to secure your account.`, '');
+            send(ws, `[SYSTEM] Welcome back, ${account.nickname}.`, 'bright');
             send(ws, '', '');
             printFooter();
             sendPrompt(clientData);
         }
 
-    } else if (account.passwordHash) {
-        clientData.pendingAccount = account;
-        clientData.authState = 'awaiting_password';
-        clientData.nickname = await generateUniqueSessionGuestName();
-
-        printBanner();
-        send(ws, `[SYSTEM] This connection is registered to account: ${account.nickname}`, 'bright');
-        send(ws, `[SYSTEM] Enter password to login, or type /guest to continue as a guest.`, '');
-        send(ws, '', '');
-        setAuthMode(clientData, true);
-
-    } else {
-        clientData.loggedInAccountId = account.id;
-        clientData.nickname = account.nickname;
-        clientData.isSiteAdmin = account.isSiteAdmin;
-
-        printBanner();
-        send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
-        send(ws, '', '');
-        send(ws, `[SYSTEM] Welcome back, ${account.nickname}.`, 'bright');
-        send(ws, '', '');
-        printFooter();
-        sendPrompt(clientData);
+    } catch (err) {
+        console.error('Error during connection setup:', err);
+        send(ws, '[SYSTEM] An error occurred during connection setup.', 'error');
+        ws.close();
+        return;
     }
 
     ws.on('message', async (raw) => {
@@ -241,8 +248,12 @@ wss.on('connection', async (ws, req) => {
     });
 
     ws.on('close', async () => {
-        if (clientData.room) {
-            await leaveCurrentRoom(clientData, buildContext(Date.now()));
+        try {
+            if (clientData.room) {
+                await leaveCurrentRoom(clientData, buildContext(Date.now()));
+            }
+        } catch (err) {
+            console.error('Error during disconnect cleanup:', err);
         }
         clients.delete(ws);
     });
@@ -262,7 +273,8 @@ async function attemptLogin(client, username, password) {
         return;
     }
     if (!account.passwordHash) {
-        send(client.ws, `This account has no password set and cannot be logged into remotely.`, 'error');
+        send(client.ws, `That account has no password set and cannot be logged into remotely.`, 'error');
+        send(client.ws, `Connect from the original IP address instead.`, '');
         sendPrompt(client);
         return;
     }
@@ -313,7 +325,7 @@ async function handleLogout(client) {
 
 async function handleInput(client, text, ts) {
 
-    // ---- Auth flow: account found via IP, has password, awaiting proof ----
+    // ---- Auth: IP-recognised account with password ----
     if (client.authState === 'awaiting_password') {
         if (text.toLowerCase() === '/guest') {
             client.authState = 'ready';
@@ -334,6 +346,9 @@ async function handleInput(client, text, ts) {
             client.pendingAccount = null;
             setAuthMode(client, false);
             send(client.ws, `[SYSTEM] Login successful. Welcome back, ${account.nickname}.`, 'bright');
+            if (account.isSiteAdmin) {
+                send(client.ws, `[SYSTEM] Site administrator privileges active.`, 'warn');
+            }
             send(client.ws, '', '');
             sendPrompt(client);
         } else {
@@ -342,7 +357,7 @@ async function handleInput(client, text, ts) {
         return;
     }
 
-    // ---- Guided /login flow: step 1, waiting for username ----
+    // ---- Guided /login step 1: waiting for username ----
     if (client.authState === 'login_awaiting_username') {
         client.loginAttemptUsername = text;
         client.authState = 'login_awaiting_password';
@@ -350,9 +365,10 @@ async function handleInput(client, text, ts) {
         return;
     }
 
-    // ---- Guided /login flow: step 2, waiting for password ----
+    // ---- Guided /login step 2: waiting for password ----
     if (client.authState === 'login_awaiting_password') {
         const username = client.loginAttemptUsername;
+        client.loginAttemptUsername = null;
         client.authState = 'ready';
         setAuthMode(client, false);
         await attemptLogin(client, username, text);
@@ -366,7 +382,7 @@ async function handleInput(client, text, ts) {
         client.authState = 'login_awaiting_username';
         send(client.ws, '', '');
         send(client.ws, 'Enter the account nickname you wish to log into:', '');
-        sendCustomPrompt(client, 'Username:');
+        sendCustomPrompt(client, 'Username: ');
         return;
     }
 
@@ -374,7 +390,8 @@ async function handleInput(client, text, ts) {
     if (trimmedLower.startsWith('/login ')) {
         const args = text.split(/\s+/).slice(1);
         if (args.length < 2) {
-            send(client.ws, 'Usage: /login <username> <password>   (or just type /login for a guided login)', 'error');
+            send(client.ws, 'Usage: /login <username> <password>', 'error');
+            send(client.ws, 'Or just type /login for a guided prompt.', '');
             return;
         }
         const promptStr = client.room ? `C:\\CHAT\\${client.room}>` : `C:\\CHAT>`;
