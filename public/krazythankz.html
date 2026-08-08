@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multiplayer Console</title>
+
+<link rel="preload" href="fonts/PerfectDOSVGA437Win.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+    @font-face {
+        font-family: 'Perfect DOS VGA 437 Win';
+        src: url('fonts/PerfectDOSVGA437Win.woff2') format('woff2'),
+             url('fonts/PerfectDOSVGA437Win.woff') format('woff');
+        font-weight: normal;
+        font-style: normal;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+
+    #terminal {
+        width: 100%; height: 100%;
+        background: #000; color: #aaaaaa;
+        font-family: 'Perfect DOS VGA 437 Win', monospace;
+        font-size: 22px;
+        padding: 12px 16px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-font-smoothing: none;
+        font-smooth: never;
+        text-rendering: optimizeSpeed;
+    }
+
+    #terminal::-webkit-scrollbar { display: none; }
+
+    .line {
+        display: block;
+        white-space: pre;
+        color: #aaaaaa;
+        line-height: 1.2;
+    }
+
+    .line.bright { color: #ffffff; }
+    .line.dim    { color: #666666; }
+    .line.gap    { margin-bottom: 10px; }
+
+    #unmute-hint {
+        position: fixed;
+        bottom: 14px;
+        right: 18px;
+        color: #666666;
+        font-family: 'Perfect DOS VGA 437 Win', monospace;
+        font-size: 16px;
+        cursor: default;
+        user-select: none;
+    }
+</style>
+</head>
+<body>
+
+<div id="terminal"></div>
+<div id="unmute-hint">[ CLICK ANYWHERE TO START AUDIO ]</div>
+
+<script>
+    const terminal = document.getElementById('terminal');
+    const unmuteHint = document.getElementById('unmute-hint');
+
+    function printLine(text, cls) {
+        const div = document.createElement('div');
+        div.className = 'line' + (cls ? ' ' + cls : '');
+        div.textContent = text || '\u00A0';
+        terminal.appendChild(div);
+    }
+
+    const asciiArt = [
+"⠀⣿⠛⠛⠛⣤⠀⠀⠀⠀⠀⣤⠛⠛⠛⣿⠀⠀⣤⣤⠟⠛⠛⠛⠛⣤⣤⠀⠀⠀",
+"⠀⣿⠀⠀⠀⠛⣤⠀⠀⠀⣤⠛⠂⠀⠀⣿⠀⣿⠀⠀⣤⠛⠛⠛⣤⠀⠀⣿⠀⠀",
+"⠀⣿⠀⠀⠀⠀⠛⣤⠀⣤⠟⠂⠀⠀⠀⣿⠀⣿⠀⠀⠛⣤⣤⣤⠛⠛⠛⠛⠀⠀",
+"⠀⣿⠀⠀⣿⣤⠀⠛⣤⠛⠂⣤⣿⠀⠀⣿⠀⠀⠛⠛⣤⣤⣤⠀⠛⠛⣤⠀⠀⠀",
+"⠀⣿⠀⠀⣿⠛⣤⠀⠛⠀⣤⠛⣿⠀⠀⣿⠀⣿⠛⠛⣤⠀⠀⠛⣤⡀⠀⣿⠀⠀",
+"⠀⣿⠀⠀⣿⠀⠛⣤⠀⣤⠛⠀⣿⠀⠀⣿⠀⠛⣤⠀⠛⠛⠛⠛⠀⠀⣤⠛⠀⠀",
+"⣿⣿⡛⠛⠛⠛⢛⠿⠛⣿⣤⣿⠛⣿⠛⣿⠛⣿⣤⠛⠛⠛⠛⠛⠛⠛⣤⣤⠀⠀",
+"⣿⢸⢉⢀⢁⢚⠘⢁⣿⣿⠛⣤⠟⣤⠛⣤⣿⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠛⣤",
+"⣿⢸⠠⢄⣿⣿⣿⣿⠟⣥⣿⣿⣿⣻⣿⣿⣿⠀⠀⣤⣿⠛⣿⣿⠛⣤⠀⠀⠀⣿",
+"⣿⢸⢰⠀⣿⠛⠛⣿⠟⣤⣿⣿⣧⣿⣿⠛⣿⠀⠀⣿⣿⠟⣤⣿⣤⣤⠛⠛⠛⠀",
+"⣿⢸⢸⠀⣿⠀⠀⣿⠟⣤⣿⣿⣿⣿⣿⠀⠀⠛⣤⣿⣿⠟⣤⣿⠀⠀⠛⠛⣤⠀",
+"⣿⢸⢸⠀⣿⠀⠀⣿⡟⣤⣿⣿⡿⢻⣿⠀⠀⣤⣤⣿⣿⠟⣤⣿⣦⠀⠀⠀⠀⣿",
+"⣿⢸⠈⠶⣿⣤⣤⣤⣿⣥⣛⡇⣥⣿⣿⣤⣿⠀⠀⠀⠛⣿⣿⣤⣤⠛⠀⠀⠀⣿",
+"⣿⢸⠀⣈⣀⣠⣀⣄⢰⢄⢓⣴⣿⣿⠛⣤⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿",
+"⣿⠘⣴⣶⣶⣶⣶⣶⣤⣤⣿⣿⣿⣤⣿⣤⣿⣿⣤⠀⠈⠀⠀⠀⠀⠀⠀⠀⣤⠛",
+"⠛⣿⣿⣿⣿⣿⣿⣿⣿⣿⠛⠛⣿⣿⣿⣿⣿⣿⣿⠛⣤⣤⣤⣤⣤⣤⠛⠛⠀⠀",
+    ];
+
+    const creditsBlock = [
+"------------------------------------------------------",
+"",
+"Supppp my tech geeks. Thanks for using this amazing little",
+"project I made. I'd like to credit some things/people:",
+"",
+"- Windows 93 (windows93.net) Trollbox: It was suuuuuch a",
+"  cool thing, I had friends in there! Why terminate it?!",
+"",
+"- My brain: for writing this site",
+"",
+"- The whole Microsoft team for writing the amazing OSs,",
+"  specially MS-DOS and Windows",
+"",
+"(P.S.: If you want the music that's playing right now, you",
+"can download it in",
+"https://pillows.su/f/e9b84a289ff8ffc0e46b548e96ec1dbc)",
+"",
+"-------------------------------------------------------",
+"",
+"xll34DOESITAGAIN, HITdatKEYcoderboyyyyyy",
+    ];
+
+    function boot() {
+        asciiArt.forEach(line => printLine(line, 'bright'));
+        printLine('', 'gap');
+        creditsBlock.forEach(line => printLine(line, ''));
+        terminal.scrollTop = 0;
+    }
+
+    boot();
+
+    // ===================== GAPLESS AUDIO LOOP =====================
+    // Using Web Audio API instead of <audio loop> because HTML5 audio
+    // looping often introduces a tiny gap/click at the seam. AudioBufferSourceNode
+    // with .loop = true is sample-accurate and truly seamless.
+
+    let audioCtx = null;
+    let audioBuffer = null;
+    let sourceNode = null;
+    let started = false;
+
+    async function loadAudio() {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const response = await fetch('audio/Windows 98 Degrees.flac');
+        const arrayBuffer = await response.arrayBuffer();
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    }
+
+    function playLoop() {
+        if (!audioBuffer || started) return;
+        sourceNode = audioCtx.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        sourceNode.loop = true;
+        sourceNode.connect(audioCtx.destination);
+        sourceNode.start(0);
+        started = true;
+        unmuteHint.style.display = 'none';
+    }
+
+    async function initAudio() {
+        try {
+            await loadAudio();
+        } catch (err) {
+            console.error('Failed to load audio:', err);
+            unmuteHint.textContent = '[ AUDIO FAILED TO LOAD ]';
+            return;
+        }
+
+        // Browsers block autoplay with sound until a user gesture happens.
+        // We attempt immediately in case autoplay policies allow it,
+        // and also bind to the first click/keypress as a guaranteed fallback.
+        try {
+            await audioCtx.resume();
+            playLoop();
+        } catch (e) {
+            // Will be started by the gesture listener below instead.
+        }
+
+        const startOnGesture = () => {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            playLoop();
+            document.removeEventListener('click', startOnGesture);
+            document.removeEventListener('keydown', startOnGesture);
+        };
+
+        document.addEventListener('click', startOnGesture);
+        document.addEventListener('keydown', startOnGesture);
+    }
+
+    initAudio();
+</script>
+</body>
+</html>
