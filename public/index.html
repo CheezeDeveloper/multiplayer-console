@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multiplayer Console</title>
+
+<link rel="preload" href="fonts/PerfectDOSVGA437Win.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+    @font-face {
+        font-family: 'Perfect DOS VGA 437 Win';
+        src: url('fonts/PerfectDOSVGA437Win.woff2') format('woff2'),
+             url('fonts/PerfectDOSVGA437Win.woff') format('woff');
+        font-weight: normal;
+        font-style: normal;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+
+    #terminal {
+        width: 100%; height: 100%;
+        background: #000; color: #aaaaaa;
+        font-family: 'Perfect DOS VGA 437 Win', monospace;
+        font-size: 32px;
+        padding: 8px 12px;
+        display: flex; flex-direction: column;
+        overflow: hidden;
+        -webkit-font-smoothing: none;
+        font-smooth: never;
+        text-rendering: optimizeSpeed;
+    }
+
+    #output {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    #output::-webkit-scrollbar { display: none; }
+
+    .line { display: block; color: #aaaaaa; line-height: 1; margin-bottom: 6px; }
+    .line.bright { color: #ffffff; }
+    .line.error  { color: #ff5555; }
+    .line.warn   { color: #ffff55; }
+
+    #input-line {
+        display: flex; align-items: center;
+        color: #aaaaaa; line-height: 1;
+        margin-top: 6px; flex-shrink: 0;
+    }
+    #prompt { white-space: nowrap; }
+
+    #input-field {
+        background: transparent; border: none; outline: none;
+        color: #aaaaaa;
+        font-family: 'Perfect DOS VGA 437 Win', monospace;
+        font-size: 32px; line-height: 1;
+        caret-color: #aaaaaa;
+        flex: 1;
+    }
+</style>
+</head>
+<body>
+<div id="terminal">
+    <div id="output"></div>
+    <div id="input-line">
+        <span id="prompt">C:\CHAT&gt;</span>
+        <input id="input-field" type="text" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" maxlength="200" disabled />
+    </div>
+</div>
+
+<script>
+    const output = document.getElementById('output');
+    const inputField = document.getElementById('input-field');
+    const promptEl = document.getElementById('prompt');
+
+    let cmdHistory = [];
+    let histIndex = -1;
+    let socket = null;
+
+    function printLine(text, cls) {
+        const div = document.createElement('div');
+        div.className = 'line' + (cls ? ' ' + cls : '');
+        div.textContent = text || '\u00A0';
+        output.appendChild(div);
+        trimLines();
+        output.scrollTop = output.scrollHeight;
+    }
+
+    function trimLines() {
+        const lines = output.querySelectorAll('.line');
+        if (lines.length > 300) {
+            for (let i = 0; i < lines.length - 300; i++) output.removeChild(lines[i]);
+        }
+    }
+
+    function connectSocket() {
+        const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        socket = new WebSocket(protocol + location.host);
+
+        socket.addEventListener('open', () => {
+            inputField.disabled = false;
+            inputField.focus();
+        });
+
+        socket.addEventListener('message', (event) => {
+            let data;
+            try { data = JSON.parse(event.data); } catch (e) { return; }
+
+            if (data.type === 'line') {
+                printLine(data.text, data.cls);
+            } else if (data.type === 'prompt') {
+                promptEl.textContent = data.text;
+            } else if (data.type === 'clear') {
+                output.innerHTML = '';
+            }
+        });
+
+        socket.addEventListener('close', () => {
+            printLine('', '');
+            printLine('[SYSTEM] Connection to server lost. Reconnecting...', 'error');
+            inputField.disabled = true;
+            setTimeout(connectSocket, 2000);
+        });
+
+        socket.addEventListener('error', () => {
+            socket.close();
+        });
+    }
+
+    function sendInput(text) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'input', text, ts: Date.now() }));
+        }
+    }
+
+    inputField.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            const val = inputField.value;
+            if (val.trim()) {
+                cmdHistory.unshift(val);
+                histIndex = -1;
+                sendInput(val);
+            }
+            inputField.value = '';
+            e.preventDefault();
+        }
+        if (e.key === 'ArrowUp') {
+            if (histIndex < cmdHistory.length - 1) {
+                histIndex++;
+                inputField.value = cmdHistory[histIndex];
+            }
+            e.preventDefault();
+        }
+        if (e.key === 'ArrowDown') {
+            if (histIndex > 0) {
+                histIndex--;
+                inputField.value = cmdHistory[histIndex];
+            } else {
+                histIndex = -1;
+                inputField.value = '';
+            }
+            e.preventDefault();
+        }
+    });
+
+    document.addEventListener('click', () => inputField.focus());
+    connectSocket();
+</script>
+</body>
+</html>
