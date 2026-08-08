@@ -54,6 +54,8 @@
         font-size: 16px;
         cursor: default;
         user-select: none;
+        max-width: 60%;
+        text-align: right;
     }
 </style>
 </head>
@@ -125,24 +127,43 @@
     boot();
 
     // ===================== GAPLESS AUDIO LOOP =====================
-    // Using Web Audio API instead of <audio loop> because HTML5 audio
-    // looping often introduces a tiny gap/click at the seam. AudioBufferSourceNode
-    // with .loop = true is sample-accurate and truly seamless.
-
     let audioCtx = null;
     let audioBuffer = null;
     let sourceNode = null;
     let started = false;
 
+    function debugLog(msg) {
+        console.log('[AUDIO DEBUG]', msg);
+        unmuteHint.textContent = msg;
+    }
+
     async function loadAudio() {
+        debugLog('Creating AudioContext...');
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const response = await fetch('audio/Windows 98 Degrees.flac');
+
+        debugLog('Fetching audio file...');
+        const response = await fetch('audio/theme.ogg');
+
+        if (!response.ok) {
+            throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
+        }
+
+        debugLog('Reading array buffer...');
         const arrayBuffer = await response.arrayBuffer();
+
+        debugLog(`Decoding audio (${arrayBuffer.byteLength} bytes)...`);
         audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+        debugLog('Ready. Click anywhere to play.');
     }
 
     function playLoop() {
-        if (!audioBuffer || started) return;
+        if (!audioBuffer) {
+            debugLog('ERROR: No audio buffer loaded yet.');
+            return;
+        }
+        if (started) return;
+
         sourceNode = audioCtx.createBufferSource();
         sourceNode.buffer = audioBuffer;
         sourceNode.loop = true;
@@ -150,34 +171,29 @@
         sourceNode.start(0);
         started = true;
         unmuteHint.style.display = 'none';
+        debugLog('Playing.');
     }
 
     async function initAudio() {
         try {
             await loadAudio();
         } catch (err) {
-            console.error('Failed to load audio:', err);
-            unmuteHint.textContent = '[ AUDIO FAILED TO LOAD ]';
+            debugLog('LOAD FAILED: ' + err.message);
+            console.error(err);
             return;
         }
 
-        // Browsers block autoplay with sound until a user gesture happens.
-        // We attempt immediately in case autoplay policies allow it,
-        // and also bind to the first click/keypress as a guaranteed fallback.
-        try {
-            await audioCtx.resume();
-            playLoop();
-        } catch (e) {
-            // Will be started by the gesture listener below instead.
-        }
-
         const startOnGesture = () => {
+            debugLog('Gesture detected. State: ' + audioCtx.state);
             if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
+                audioCtx.resume().then(() => {
+                    playLoop();
+                }).catch(err => {
+                    debugLog('Resume failed: ' + err.message);
+                });
+            } else {
+                playLoop();
             }
-            playLoop();
-            document.removeEventListener('click', startOnGesture);
-            document.removeEventListener('keydown', startOnGesture);
         };
 
         document.addEventListener('click', startOnGesture);
