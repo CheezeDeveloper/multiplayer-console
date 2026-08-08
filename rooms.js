@@ -1,61 +1,36 @@
-const fs = require('fs');
-const path = require('path');
+const db = require('./db');
 
-const DATA_DIR = path.join(__dirname, 'data');
-const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
-
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(ROOMS_FILE)) fs.writeFileSync(ROOMS_FILE, '{}');
-
-let roomConfigs = {};
+// Runtime cache: room name -> live Room instance (holds connected users, which is never persisted)
 const liveRooms = new Map();
-
-function loadConfigs() {
-    try {
-        roomConfigs = JSON.parse(fs.readFileSync(ROOMS_FILE, 'utf-8'));
-    } catch (e) {
-        roomConfigs = {};
-    }
-}
-
-function saveConfigs() {
-    try {
-        fs.writeFileSync(ROOMS_FILE, JSON.stringify(roomConfigs, null, 2));
-    } catch (e) {
-        console.error('Failed to save rooms:', e);
-    }
-}
-
-loadConfigs();
 
 class Room {
     constructor(name, config) {
         this.name = name;
         this.creatorAccountId = config.creatorAccountId;
         this.passwordHash = config.passwordHash || null;
-        this.adminAccountIds = new Set(config.adminAccountIds || [config.creatorAccountId]);
+        this.adminAccountIds = new Set(config.adminAccountIds || []);
         this.bannedAccountIds = new Set(config.bannedAccountIds || []);
         this.bannedIps = new Set(config.bannedIps || []);
         this.createdAt = config.createdAt || Date.now();
 
-        // Live runtime state — NOT persisted to disk
+        // Runtime-only, never written to DB
         this.users = new Map(); // sessionId -> { accountId, nickname, isAdmin, ip, muted }
     }
 
-    toConfig() {
-        return {
-            creatorAccountId: this.creatorAccountId,
-            passwordHash: this.passwordHash,
-            adminAccountIds: Array.from(this.adminAccountIds),
-            bannedAccountIds: Array.from(this.bannedAccountIds),
-            bannedIps: Array.from(this.bannedIps),
-            createdAt: this.createdAt,
-        };
-    }
-
-    persist() {
-        roomConfigs[this.name] = this.toConfig();
-        saveConfigs();
+    async persist() {
+        await db.query(
+            `UPDATE rooms
+             SET password_hash = $1, admin_account_ids = $2,
+                 banned_account_ids = $3, banned_ips = $4
+             WHERE name = $5`,
+            [
+                this.passwordHash,
+                Array.from(this.adminAccountIds),
+                Array.from(this.bannedAccountIds),
+                Array.from(this.bannedIps),
+                this.name,
+            ]
+        );
     }
 
     addUser(sessionId, accountId, nickname, ip) {
@@ -82,31 +57,72 @@ class Room {
     }
 }
 
-// Rebuild live registry from disk at boot (empty user lists — nobody connected yet)
-for (const [name, config] of Object.entries(roomConfigs)) {
-    liveRooms.set(name, new Room(name, config));
+function rowToConfig(row) {
+    return {
+        creatorAccountId: row.creator_account_id,
+        passwordHash: row.password_hash,
+        adminAccountIds: row.admin_account_ids,
+        bannedAccountIds: row.banned_account_ids,
+        bannedIps: row.banned_ips,
+        createdAt: row.created_at,
+    };
 }
 
-function createRoom(name, creatorAccountId) {
+// Creates a room. Returns null if the name is already taken.
+async function createRoom(name, creatorAccountId) {
     const key = name.toUpperCase();
-    if (liveRooms.has(key)) return null;
+
+    const existing = await db.query('SELECT 1 FROM rooms WHERE name = $1', [key]);
+    if (existing.rows.length > 0) return null;
+
+    await db.query(
+        `INSERT INTO rooms (name, creator_account_id, admin_account_ids)
+         VALUES ($1, $2, $3)`,
+        [key, creatorAccountId, [creatorAccountId]]
+    );
 
     const room = new Room(key, { creatorAccountId, adminAccountIds: [creatorAccountId] });
     liveRooms.set(key, room);
-    room.persist();
     return room;
 }
 
-function getRoom(name) {
-    return liveRooms.get(name.toUpperCase());
+// Async — checks memory cache first, falls back to DB, caches result.
+async function getRoom(name) {
+    const key = name.toUpperCase();
+    if (liveRooms.has(key)) return liveRooms.get(key);
+
+    const res = await db.query('SELECT * FROM rooms WHERE name = $1', [key]);
+    if (res.rows.length === 0) return null;
+
+    const room = new Room(key, rowToConfig(res.rows[0]));
+    liveRooms.set(key, room);
+    return room;
 }
 
-function listRooms() {
-    return Array.from(liveRooms.values());
+// Sync — only checks the in-memory cache. Safe to use in hot paths
+// (like broadcasting chat messages) since any room with connected
+// users must already be cached.
+function getRoomSync(name) {
+    return liveRooms.get(name.toUpperCase()) || null;
+}
+
+// Returns summaries of every room that has ever been created, including
+// ones with nobody currently online. userCount is 0 if not cached live.
+async function listRooms() {
+    const res = await db.query('SELECT name, password_hash FROM rooms ORDER BY name ASC');
+    return res.rows.map(row => {
+        const live = liveRooms.get(row.name);
+        return {
+            name: row.name,
+            userCount: live ? live.users.size : 0,
+            passwordHash: row.password_hash,
+        };
+    });
 }
 
 module.exports = {
     createRoom,
     getRoom,
+    getRoomSync,
     listRooms,
 };
