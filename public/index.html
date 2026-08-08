@@ -114,8 +114,16 @@
                 printLine(data.text, data.cls);
             } else if (data.type === 'prompt') {
                 promptEl.textContent = data.text;
+                inputField.type = 'text';
             } else if (data.type === 'clear') {
                 output.innerHTML = '';
+            } else if (data.type === 'authmode') {
+                if (data.enabled) {
+                    inputField.type = 'password';
+                    promptEl.textContent = 'Password:';
+                } else {
+                    inputField.type = 'text';
+                }
             }
         });
 
@@ -141,21 +149,23 @@
         if (e.key === 'Enter') {
             const val = inputField.value;
             if (val.trim()) {
-                cmdHistory.unshift(val);
-                histIndex = -1;
+                if (inputField.type !== 'password') {
+                    cmdHistory.unshift(val);
+                    histIndex = -1;
+                }
                 sendInput(val);
             }
             inputField.value = '';
             e.preventDefault();
         }
-        if (e.key === 'ArrowUp') {
+        if (e.key === 'ArrowUp' && inputField.type !== 'password') {
             if (histIndex < cmdHistory.length - 1) {
                 histIndex++;
                 inputField.value = cmdHistory[histIndex];
             }
             e.preventDefault();
         }
-        if (e.key === 'ArrowDown') {
+        if (e.key === 'ArrowDown' && inputField.type !== 'password') {
             if (histIndex > 0) {
                 histIndex--;
                 inputField.value = cmdHistory[histIndex];
