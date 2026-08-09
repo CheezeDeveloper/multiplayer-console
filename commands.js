@@ -664,7 +664,7 @@ async function processCommand(client, text, ctx) {
             }
 
             const bundles = {
-                doom:   'https://js-dos.com/v7/build/test/doom.jsdos',
+                doom:   '/doom.jsdos',
                 digger: 'https://js-dos.com/v7/build/test/digger.jsdos',
             };
 
