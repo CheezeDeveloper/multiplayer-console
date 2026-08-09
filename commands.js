@@ -34,11 +34,12 @@ async function processCommand(client, text, ctx) {
                 send(client.ws, 'No servers currently exist.', 'error');
                 send(client.ws, 'Create one with: connect create /server=NAME', '');
             } else {
-                send(client.ws, 'Listing all available servers...', '');
-                send(client.ws, '', '');
                 send(client.ws, 'SERVER NAME       USERS  LOCKED', 'bright');
                 allRooms.forEach(r => {
-                    send(client.ws, `${r.name.padEnd(18)}${String(r.userCount).padEnd(7)}${r.passwordHash ? 'YES' : 'no'}`, '');
+                    send(client.ws,
+                        `${r.name.padEnd(18)}${String(r.userCount).padEnd(7)}${r.passwordHash ? 'YES' : 'no'}`,
+                        ''
+                    );
                 });
             }
             send(client.ws, '', '');
@@ -53,7 +54,10 @@ async function processCommand(client, text, ctx) {
                 send(client.ws, 'Create one with: connect create /server=NAME', '');
             } else {
                 const best = allRooms.reduce((a, b) => (a.userCount >= b.userCount ? a : b));
-                send(client.ws, `Found: ${best.name}  (${best.userCount} user(s) online)${best.passwordHash ? ' [PASSWORD PROTECTED]' : ''}`, 'bright');
+                send(client.ws,
+                    `Found: ${best.name}  (${best.userCount} user(s) online)${best.passwordHash ? ' [LOCKED]' : ''}`,
+                    'bright'
+                );
                 send(client.ws, `Type "connect /server=${best.name}" to join.`, '');
             }
             send(client.ws, '', '');
@@ -65,15 +69,19 @@ async function processCommand(client, text, ctx) {
             const serverName = createMatch[1].toUpperCase();
 
             if (await getRoom(serverName)) {
-                send(client.ws, `Server "${serverName}" already exists. Use connect /server=${serverName} to join.`, 'error');
+                send(client.ws, `Server "${serverName}" already exists.`, 'error');
                 return;
             }
 
             if (client.room) await leaveCurrentRoom(client, ctx);
 
             const myId = effectiveId(client);
-            const room = await createRoom(serverName, myId);
+            if (!myId) {
+                send(client.ws, 'You must be logged into an account to create a room.', 'error');
+                return;
+            }
 
+            const room = await createRoom(serverName, myId);
             if (!room) {
                 send(client.ws, `Server "${serverName}" already exists.`, 'error');
                 return;
@@ -86,7 +94,7 @@ async function processCommand(client, text, ctx) {
             send(client.ws, '', '');
             send(client.ws, `Creating server "${serverName}"...`, '');
             send(client.ws, `Server "${serverName}" created successfully.`, 'bright');
-            send(client.ws, `You are now the admin of this room.`, 'bright');
+            send(client.ws, `You are the admin of this room.`, 'bright');
             send(client.ws, '', '');
             send(client.ws, `[SYSTEM] Connected to ${serverName}. 1 user(s) online.`, '');
             send(client.ws, '', '');
@@ -107,7 +115,7 @@ async function processCommand(client, text, ctx) {
 
             const myId = effectiveId(client);
 
-            if (room.isBanned(myId, client.ip)) {
+            if (myId && room.isBanned(myId, client.ip)) {
                 send(client.ws, `You are banned from ${serverName}.`, 'error');
                 return;
             }
@@ -116,7 +124,7 @@ async function processCommand(client, text, ctx) {
                 const passMatch = text.match(/password[=:](\S+)/i);
                 if (!passMatch) {
                     send(client.ws, `This room requires a password.`, 'error');
-                    send(client.ws, `Reconnect with: connect /server=${serverName} password=YOURPASSWORD`, '');
+                    send(client.ws, `Usage: connect /server=${serverName} password=YOURPASSWORD`, '');
                     return;
                 }
                 if (!verifyPassword(passMatch[1], room.passwordHash)) {
@@ -149,27 +157,30 @@ async function processCommand(client, text, ctx) {
         return;
     }
 
-    // ===================== SLASH COMMANDS =====================
     const cmd = parts[0].toLowerCase();
 
     switch (cmd) {
+
+        // ===================== HELP =====================
         case '/help': {
             send(client.ws, '', '');
             send(client.ws, 'Available commands:', 'bright');
             send(client.ws, '  connect /server=NAME             Join a server', '');
             send(client.ws, '  connect /server=NAME password=X  Join a locked server', '');
-            send(client.ws, '  connect /find                    Find a server', '');
+            send(client.ws, '  connect /find                    Find best server', '');
             send(client.ws, '  connect /findall                 List all servers', '');
             send(client.ws, '  connect create /server=NAME      Create a room', '');
-            send(client.ws, '  /help                            Show this help', '');
+            send(client.ws, '  /help                            This list', '');
             send(client.ws, '  /clear                           Clear screen', '');
             send(client.ws, '  /users                           List online users', '');
             send(client.ws, '  /ping                            Test latency', '');
             send(client.ws, '  /nick <name>                     Change nickname', '');
             send(client.ws, '  /me <action>                     Emote action', '');
-            send(client.ws, '  /login                           Log into your account', '');
-            send(client.ws, '  /logout                          Log out of your account', '');
-            send(client.ws, '  /quit                            Disconnect from room', '');
+            send(client.ws, '  /whoami                          Show your info', '');
+            send(client.ws, '  /whois <nick>                    Show info on a user', '');
+            send(client.ws, '  /login                           Login to account', '');
+            send(client.ws, '  /logout                          Logout of account', '');
+            send(client.ws, '  /quit                            Leave current room', '');
             send(client.ws, '  /password add <pass>             Set account password', '');
             send(client.ws, '  /password edit <pass>            Change account password', '');
             send(client.ws, '  /password remove                 Remove account password', '');
@@ -178,9 +189,9 @@ async function processCommand(client, text, ctx) {
                 send(client.ws, 'Room admin commands:', 'warn');
                 send(client.ws, '  /kick user=NAME                  Kick a user', '');
                 send(client.ws, '  /ban user=NAME                   Ban a user', '');
-                send(client.ws, '  /banip ip=IP                     Ban an IP address', '');
-                send(client.ws, '  /mute user=NAME                  Mute a user', '');
-                send(client.ws, '  /promote user=NAME               Promote user to admin', '');
+                send(client.ws, '  /banip ip=IP                     Ban an IP', '');
+                send(client.ws, '  /mute user=NAME                  Mute/unmute a user', '');
+                send(client.ws, '  /promote user=NAME               Promote to admin', '');
                 send(client.ws, '  /password room add <pass>        Lock the room', '');
                 send(client.ws, '  /password room edit <pass>       Change room password', '');
                 send(client.ws, '  /password room remove            Unlock the room', '');
@@ -188,18 +199,34 @@ async function processCommand(client, text, ctx) {
             if (client.isSiteAdmin) {
                 send(client.ws, '', '');
                 send(client.ws, 'Site admin commands:', 'warn');
-                send(client.ws, '  /siteban user=NAME               Ban an account from the whole site', '');
-                send(client.ws, '  /siteunban user=NAME             Remove a site-wide ban', '');
-                send(client.ws, '  /announce <message>              Broadcast to every connected user', '');
+                send(client.ws, '  /siteban user=NAME               Ban from entire site', '');
+                send(client.ws, '  /siteunban user=NAME             Remove site ban', '');
+                send(client.ws, '  /announce <message>              Broadcast to all users', '');
             }
+            send(client.ws, '', '');
+            send(client.ws, 'DOS-style commands:', 'bright');
+            send(client.ws, '  ver                              Show system version', '');
+            send(client.ws, '  cls                              Clear screen', '');
+            send(client.ws, '  dir                              List directory', '');
+            send(client.ws, '  date                             Show current date', '');
+            send(client.ws, '  time                             Show current time', '');
+            send(client.ws, '  echo <text>                      Echo text back', '');
+            send(client.ws, '', '');
+            send(client.ws, 'Fun commands:', 'bright');
+            send(client.ws, '  /8ball ask="question"            Ask the Magic 8-Ball', '');
+            send(client.ws, '  /color <hex>                     Change console color', '');
+            send(client.ws, '  /color reset                     Reset console color', '');
+            send(client.ws, '  /version                         Show MPCMD version', '');
             send(client.ws, '', '');
             break;
         }
 
+        // ===================== CLEAR =====================
         case '/clear':
             sendClear(client);
             break;
 
+        // ===================== USERS =====================
         case '/users': {
             if (!client.room) {
                 send(client.ws, 'Not connected to any server.', 'error');
@@ -209,34 +236,32 @@ async function processCommand(client, text, ctx) {
             send(client.ws, '', '');
             send(client.ws, `Users online in ${client.room}:`, 'bright');
             for (const [sessionId, info] of room.users.entries()) {
-                let tag = '';
-                if (sessionId === client.id) tag = '(you)';
-                else if (info.isAdmin) tag = '(admin)';
+                let tag = sessionId === client.id ? '(you)' : info.isAdmin ? '(admin)' : '';
                 send(client.ws, `  ${info.nickname.padEnd(14)}${tag}`, info.isAdmin ? 'warn' : '');
             }
             send(client.ws, '', '');
             break;
         }
 
+        // ===================== PING =====================
         case '/ping': {
             const latency = Math.max(1, Date.now() - ts);
             send(client.ws, `Pinging ${client.room || 'server'}... Reply: ${latency}ms`, '');
             break;
         }
 
+        // ===================== NICK =====================
         case '/nick': {
             if (!parts[1]) {
                 send(client.ws, 'Usage: /nick <newname>', 'error');
                 break;
             }
             const newNick = parts[1].slice(0, 16);
-
             const taken = await nicknameTaken(newNick, client.loggedInAccountId);
             if (taken) {
                 send(client.ws, `The name "${newNick}" is already taken.`, 'error');
                 break;
             }
-
             const oldNick = client.nickname;
             client.nickname = newNick;
 
@@ -260,6 +285,7 @@ async function processCommand(client, text, ctx) {
             break;
         }
 
+        // ===================== ME =====================
         case '/me': {
             if (!client.room) {
                 send(client.ws, 'Not connected to any server.', 'error');
@@ -274,6 +300,48 @@ async function processCommand(client, text, ctx) {
             break;
         }
 
+        // ===================== WHOAMI =====================
+        case '/whoami': {
+            send(client.ws, '', '');
+            send(client.ws, 'USER INFORMATION:', 'bright');
+            send(client.ws, `  Nickname  :  ${client.nickname}`, '');
+            send(client.ws, `  Account   :  ${client.loggedInAccountId || 'GUEST (no account)'}`, '');
+            send(client.ws, `  Room      :  ${client.room || 'none'}`, '');
+            send(client.ws, `  Room Admin:  ${client.isAdmin ? 'YES' : 'no'}`, '');
+            send(client.ws, `  Site Admin:  ${client.isSiteAdmin ? 'YES' : 'no'}`, '');
+            send(client.ws, `  IP        :  ${client.ip}`, 'dim');
+            send(client.ws, '', '');
+            break;
+        }
+
+        // ===================== WHOIS =====================
+        case '/whois': {
+            if (!client.room) {
+                send(client.ws, 'You must be in a room to use /whois.', 'error');
+                break;
+            }
+            const targetName = parts[1];
+            if (!targetName) {
+                send(client.ws, 'Usage: /whois <nickname>', 'error');
+                break;
+            }
+            const room = await getRoom(client.room);
+            const found = room.getUserByNickname(targetName);
+            if (!found) {
+                send(client.ws, `User "${targetName}" not found in this room.`, 'error');
+                break;
+            }
+            send(client.ws, '', '');
+            send(client.ws, `USER INFO: ${found.info.nickname}`, 'bright');
+            send(client.ws, `  Status    :  Online`, '');
+            send(client.ws, `  Room      :  ${client.room}`, '');
+            send(client.ws, `  Role      :  ${found.info.isAdmin ? 'Room Admin' : 'User'}`, '');
+            send(client.ws, `  Account   :  ${found.info.accountId || 'Guest'}`, '');
+            send(client.ws, '', '');
+            break;
+        }
+
+        // ===================== QUIT =====================
         case '/quit': {
             if (!client.room) {
                 send(client.ws, 'Not connected to any server.', 'error');
@@ -311,32 +379,30 @@ async function processCommand(client, text, ctx) {
 
             if (target === 'account') {
                 if (!client.loggedInAccountId) {
-                    send(client.ws, 'You must be logged into an account to manage its password.', 'error');
+                    send(client.ws, 'You must be logged in to manage your account password.', 'error');
                     break;
                 }
                 const account = await findAccountById(client.loggedInAccountId);
 
                 if (action === 'add') {
                     if (account.passwordHash) {
-                        send(client.ws, 'Account already has a password. Use /password edit <new> instead.', 'error');
+                        send(client.ws, 'Account already has a password. Use /password edit instead.', 'error');
                         break;
                     }
                     if (!value) { send(client.ws, 'Usage: /password add <password>', 'error'); break; }
                     await setPassword(account.id, hashPassword(value));
                     send(client.ws, 'Password added to your account.', 'bright');
-
                 } else if (action === 'edit') {
                     if (!account.passwordHash) {
-                        send(client.ws, 'Account has no password set. Use /password add <password> instead.', 'error');
+                        send(client.ws, 'No password set. Use /password add instead.', 'error');
                         break;
                     }
                     if (!value) { send(client.ws, 'Usage: /password edit <newpassword>', 'error'); break; }
                     await setPassword(account.id, hashPassword(value));
                     send(client.ws, 'Account password updated.', 'bright');
-
                 } else if (action === 'remove') {
                     if (!account.passwordHash) {
-                        send(client.ws, 'Account has no password set.', 'error');
+                        send(client.ws, 'No password set.', 'error');
                         break;
                     }
                     await removePassword(account.id);
@@ -349,24 +415,22 @@ async function processCommand(client, text, ctx) {
 
                 if (action === 'add') {
                     if (room.passwordHash) {
-                        send(client.ws, 'Room already has a password. Use /password room edit <new> instead.', 'error');
+                        send(client.ws, 'Room already has a password. Use /password room edit instead.', 'error');
                         break;
                     }
                     if (!value) { send(client.ws, 'Usage: /password room add <password>', 'error'); break; }
                     room.passwordHash = hashPassword(value);
                     await room.persist();
-                    send(client.ws, `Password added. Room ${client.room} is now locked.`, 'bright');
-
+                    send(client.ws, `Room ${client.room} is now locked.`, 'bright');
                 } else if (action === 'edit') {
                     if (!room.passwordHash) {
-                        send(client.ws, 'Room has no password. Use /password room add <new> instead.', 'error');
+                        send(client.ws, 'Room has no password. Use /password room add instead.', 'error');
                         break;
                     }
                     if (!value) { send(client.ws, 'Usage: /password room edit <newpassword>', 'error'); break; }
                     room.passwordHash = hashPassword(value);
                     await room.persist();
                     send(client.ws, 'Room password updated.', 'bright');
-
                 } else if (action === 'remove') {
                     if (!room.passwordHash) {
                         send(client.ws, 'Room has no password set.', 'error');
@@ -374,13 +438,13 @@ async function processCommand(client, text, ctx) {
                     }
                     room.passwordHash = null;
                     await room.persist();
-                    send(client.ws, `Room password removed. ${client.room} is now unlocked.`, 'bright');
+                    send(client.ws, `Room ${client.room} is now unlocked.`, 'bright');
                 }
             }
             break;
         }
 
-        // ===================== ROOM ADMIN COMMANDS =====================
+        // ===================== ADMIN COMMANDS =====================
         case '/kick':
             if (!requireAdmin(client, send)) break;
             await handleUserTarget(client, text, 'kick', ctx);
@@ -427,10 +491,10 @@ async function processCommand(client, text, ctx) {
             room.adminAccountIds.add(found.info.accountId);
             await room.persist();
 
-            const targetClient = findClientById(found.sessionId);
-            if (targetClient) {
-                targetClient.isAdmin = true;
-                send(targetClient.ws, `You have been promoted to admin by ${client.nickname}.`, 'warn');
+            const promotedClient = findClientById(found.sessionId);
+            if (promotedClient) {
+                promotedClient.isAdmin = true;
+                send(promotedClient.ws, `You have been promoted to admin by ${client.nickname}.`, 'warn');
             }
             broadcastToRoom(client.room, `[SYSTEM] ${found.info.nickname} has been promoted to admin.`, 'warn', client.id);
             send(client.ws, `${found.info.nickname} has been promoted to admin.`, 'warn');
@@ -440,45 +504,32 @@ async function processCommand(client, text, ctx) {
         // ===================== SITE ADMIN COMMANDS =====================
         case '/siteban': {
             if (!client.isSiteAdmin) {
-                send(client.ws, 'Access denied. Site admin privileges required.', 'error');
+                send(client.ws, 'Access denied. Site admin only.', 'error');
                 break;
             }
             const match = text.match(/user[=:](\S+)/i);
-            if (!match) {
-                send(client.ws, 'Usage: /siteban user=USERNAME', 'error');
-                break;
-            }
+            if (!match) { send(client.ws, 'Usage: /siteban user=USERNAME', 'error'); break; }
             const target = await findAccountByNickname(match[1]);
-            if (!target) {
-                send(client.ws, `Account "${match[1]}" not found.`, 'error');
-                break;
-            }
+            if (!target) { send(client.ws, `Account "${match[1]}" not found.`, 'error'); break; }
             await setGlobalBan(target.id, true);
-            send(client.ws, `${target.nickname} has been banned from the entire site.`, 'warn');
-
-            const targetClient = findClientByAccountId(target.id);
-            if (targetClient) {
-                send(targetClient.ws, 'You have been banned from this site by a site administrator.', 'error');
-                targetClient.ws.close();
+            send(client.ws, `${target.nickname} has been banned from the site.`, 'warn');
+            const bannedClient = findClientByAccountId(target.id);
+            if (bannedClient) {
+                send(bannedClient.ws, 'You have been banned from this site.', 'error');
+                bannedClient.ws.close();
             }
             break;
         }
 
         case '/siteunban': {
             if (!client.isSiteAdmin) {
-                send(client.ws, 'Access denied. Site admin privileges required.', 'error');
+                send(client.ws, 'Access denied. Site admin only.', 'error');
                 break;
             }
             const match = text.match(/user[=:](\S+)/i);
-            if (!match) {
-                send(client.ws, 'Usage: /siteunban user=USERNAME', 'error');
-                break;
-            }
+            if (!match) { send(client.ws, 'Usage: /siteunban user=USERNAME', 'error'); break; }
             const target = await findAccountByNickname(match[1]);
-            if (!target) {
-                send(client.ws, `Account "${match[1]}" not found.`, 'error');
-                break;
-            }
+            if (!target) { send(client.ws, `Account "${match[1]}" not found.`, 'error'); break; }
             await setGlobalBan(target.id, false);
             send(client.ws, `${target.nickname}'s site ban has been lifted.`, 'bright');
             break;
@@ -486,15 +537,119 @@ async function processCommand(client, text, ctx) {
 
         case '/announce': {
             if (!client.isSiteAdmin) {
-                send(client.ws, 'Access denied. Site admin privileges required.', 'error');
+                send(client.ws, 'Access denied. Site admin only.', 'error');
                 break;
             }
             const message = parts.slice(1).join(' ');
-            if (!message) {
-                send(client.ws, 'Usage: /announce <message>', 'error');
+            if (!message) { send(client.ws, 'Usage: /announce <message>', 'error'); break; }
+            broadcastGlobal(`[ANNOUNCEMENT] ${message}`, 'bright');
+            break;
+        }
+
+        // ===================== VERSION =====================
+        case '/version':
+        case 'ver': {
+            send(client.ws, '', '');
+            send(client.ws, 'MultiPlayer CoMmanD (Prompt)', 'bright');
+            send(client.ws, 'MPCMD [Version 1.01]', '');
+            send(client.ws, '(C) MPCMD Systems. Created by codexll34.', 'dim');
+            send(client.ws, '', '');
+            break;
+        }
+
+        // ===================== COLOR =====================
+        case '/color': {
+            const colorArg = parts[1];
+            if (!colorArg) {
+                send(client.ws, 'Usage: /color <hex>   e.g. /color #00ff00', 'error');
+                send(client.ws, 'Use /color reset to restore default.', '');
                 break;
             }
-            broadcastGlobal(`[ANNOUNCEMENT] ${message}`, 'bright');
+            const targetColor = colorArg.toLowerCase() === 'reset' ? '#aaaaaa' : colorArg;
+            client.ws.send(JSON.stringify({ type: 'color-change', color: targetColor }));
+            send(client.ws, `Console color changed to ${targetColor}.`, '');
+            break;
+        }
+
+        // ===================== MAGIC 8-BALL =====================
+        case '/8ball': {
+            const askMatch = text.match(/ask=["'](.+?)["']/i);
+            if (!askMatch) {
+                send(client.ws, 'Usage: /8ball ask="Your question here"', 'error');
+                break;
+            }
+            const question = askMatch[1];
+            const responses = [
+                'It is certain.',
+                'It is decidedly so.',
+                'Without a doubt.',
+                'Yes, definitely.',
+                'You may rely on it.',
+                'As I see it, yes.',
+                'Most likely.',
+                'Outlook good.',
+                'Yes.',
+                'Signs point to yes.',
+                'Reply hazy, try again.',
+                'Ask again later.',
+                'Better not tell you now.',
+                'Cannot predict now.',
+                'Concentrate and ask again.',
+                'Absolutely not.',
+                "Don't count on it.",
+                'My reply is no.',
+                'My sources say no.',
+                'Outlook not so good.',
+                'Very doubtful.',
+            ];
+            const answer = responses[Math.floor(Math.random() * responses.length)];
+            send(client.ws, '', '');
+            send(client.ws, `You asked: "${question}"`, 'dim');
+            send(client.ws, `The Magic 8-Ball answers: ${answer}`, 'bright');
+            send(client.ws, '', '');
+            break;
+        }
+
+        // ===================== DOS COMMANDS =====================
+        case 'cls':
+            sendClear(client);
+            break;
+
+        case 'dir': {
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('en-US', {
+                month: '2-digit', day: '2-digit', year: '2-digit'
+            });
+            send(client.ws, '', '');
+            send(client.ws, ` Volume in drive C is MPCMD`, '');
+            send(client.ws, ` Directory of C:\\CHAT`, '');
+            send(client.ws, '', '');
+            send(client.ws, `COMMANDS  SYS       42,069  ${dateStr}  12:00a`, '');
+            send(client.ws, `ROOMS     DAT        1,337  ${dateStr}  12:00a`, '');
+            send(client.ws, `ACCOUNTS  DB        99,999  ${dateStr}  12:00a`, '');
+            send(client.ws, `CHATLOG   TXT     Infinite  ${dateStr}  ${getTimestamp()}`, '');
+            send(client.ws, `        4 file(s)`, '');
+            send(client.ws, '', '');
+            break;
+        }
+
+        case 'date': {
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('en-US', {
+                weekday: 'short', month: '2-digit', day: '2-digit', year: 'numeric'
+            });
+            send(client.ws, `Current date is ${dateStr}`, '');
+            break;
+        }
+
+        case 'time': {
+            send(client.ws, `Current time is ${getTimestamp()}`, '');
+            break;
+        }
+
+        case 'echo': {
+            const echoText = parts.slice(1).join(' ');
+            send(client.ws, echoText || '', '');
             break;
         }
 
@@ -523,15 +678,13 @@ async function handleUserTarget(client, text, action, ctx) {
         send(client.ws, `Usage: /${action} user=USERNAME`, 'error');
         return;
     }
-    const targetName = match[1];
     const room = await getRoom(client.room);
-    const found = room.getUserByNickname(targetName);
+    const found = room.getUserByNickname(match[1]);
 
     if (!found) {
-        send(client.ws, `User "${targetName}" not found in this room.`, 'error');
+        send(client.ws, `User "${match[1]}" not found in this room.`, 'error');
         return;
     }
-
     if (found.sessionId === client.id) {
         send(client.ws, `You cannot ${action} yourself.`, 'error');
         return;
@@ -545,7 +698,7 @@ async function handleUserTarget(client, text, action, ctx) {
             if (targetClient) {
                 targetClient.room = null;
                 targetClient.isAdmin = false;
-                send(targetClient.ws, `You have been kicked from the room by ${client.nickname}.`, 'error');
+                send(targetClient.ws, `You have been kicked by ${client.nickname}.`, 'error');
                 sendPrompt(targetClient);
             }
             broadcastToRoom(client.room, `[SYSTEM] ${found.info.nickname} has been kicked.`, 'warn', null);
@@ -559,7 +712,7 @@ async function handleUserTarget(client, text, action, ctx) {
             if (targetClient) {
                 targetClient.room = null;
                 targetClient.isAdmin = false;
-                send(targetClient.ws, `You have been banned from the room by ${client.nickname}.`, 'error');
+                send(targetClient.ws, `You have been banned by ${client.nickname}.`, 'error');
                 sendPrompt(targetClient);
             }
             broadcastToRoom(client.room, `[SYSTEM] ${found.info.nickname} has been banned.`, 'warn', null);
@@ -568,9 +721,7 @@ async function handleUserTarget(client, text, action, ctx) {
         case 'mute': {
             found.info.muted = !found.info.muted;
             const state = found.info.muted ? 'muted' : 'unmuted';
-            if (targetClient) {
-                send(targetClient.ws, `You have been ${state} by ${client.nickname}.`, 'warn');
-            }
+            if (targetClient) send(targetClient.ws, `You have been ${state} by ${client.nickname}.`, 'warn');
             broadcastToRoom(client.room, `[SYSTEM] ${found.info.nickname} has been ${state}.`, 'warn', client.id);
             send(client.ws, `${found.info.nickname} has been ${state}.`, 'warn');
             break;
