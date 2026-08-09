@@ -170,30 +170,24 @@
     }
 
     // ===================== JS-DOS =====================
-    function openDos(bundleUrl) {
-        dosContainer.style.display = 'flex';
-        inputField.disabled = true;
+   function openDos(bundleUrl) {
+    console.log("Loading bundle from:", bundleUrl);
+    dosContainer.style.display = 'flex';
+    inputField.disabled = true;
 
-        Dos(document.getElementById('jsdos')).run(bundleUrl).then((ci) => {
+    // We use the new Emulators syntax for v7
+    Dos(document.getElementById('jsdos'))
+        .run(bundleUrl)
+        .then((ci) => {
+            console.log("Success!");
             dosInstance = ci;
-        }).catch((err) => {
-            printLine('Failed to start DOS emulator: ' + err.message, 'error');
-            closeDos();
+        })
+        .catch((err) => {
+            // THIS WILL TELL US THE TRUTH
+            console.error("The Emulator failed. Error:", err);
+            printLine("ERROR: " + err.message, "error");
         });
-    }
-
-    function closeDos() {
-        if (dosInstance) {
-            dosInstance.exit();
-            dosInstance = null;
-        }
-        // Clear the jsdos div so next run starts fresh
-        document.getElementById('jsdos').innerHTML = '';
-        dosContainer.style.display = 'none';
-        inputField.disabled = false;
-        inputField.focus();
-    }
-
+}
     // ===================== WEBSOCKET =====================
     function connectSocket() {
         const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
