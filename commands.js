@@ -211,6 +211,7 @@ async function processCommand(client, text, ctx) {
             send(client.ws, '  date                             Show current date', '');
             send(client.ws, '  time                             Show current time', '');
             send(client.ws, '  echo <text>                      Echo text back', '');
+            send(client.ws, '  run <program>                    Run a DOS program', '');
             send(client.ws, '', '');
             send(client.ws, 'Fun commands:', 'bright');
             send(client.ws, '  /8ball ask="question"            Ask the Magic 8-Ball', '');
@@ -501,7 +502,7 @@ async function processCommand(client, text, ctx) {
             break;
         }
 
-        // ===================== SITE ADMIN COMMANDS =====================
+        // ===================== SITE ADMIN =====================
         case '/siteban': {
             if (!client.isSiteAdmin) {
                 send(client.ws, 'Access denied. Site admin only.', 'error');
@@ -551,7 +552,7 @@ async function processCommand(client, text, ctx) {
         case 'ver': {
             send(client.ws, '', '');
             send(client.ws, 'MultiPlayer CoMmanD (Prompt)', 'bright');
-            send(client.ws, 'MPCMD [Version 1.01]', '');
+            send(client.ws, 'MPCMD [Version 1.02]', '');
             send(client.ws, '(C) MPCMD Systems. Created by codexll34.', 'dim');
             send(client.ws, '', '');
             break;
@@ -562,12 +563,12 @@ async function processCommand(client, text, ctx) {
             const colorArg = parts[1];
             if (!colorArg) {
                 send(client.ws, 'Usage: /color <hex>   e.g. /color #00ff00', 'error');
-                send(client.ws, 'Use /color reset to restore default.', '');
+                send(client.ws, 'Use /color reset to restore default color.', '');
                 break;
             }
             const targetColor = colorArg.toLowerCase() === 'reset' ? '#aaaaaa' : colorArg;
             client.ws.send(JSON.stringify({ type: 'color-change', color: targetColor }));
-            send(client.ws, `Console color changed to ${targetColor}.`, '');
+            send(client.ws, `Terminal color set to ${targetColor}.`, '');
             break;
         }
 
@@ -650,6 +651,34 @@ async function processCommand(client, text, ctx) {
         case 'echo': {
             const echoText = parts.slice(1).join(' ');
             send(client.ws, echoText || '', '');
+            break;
+        }
+
+        // ===================== RUN DOS PROGRAM =====================
+        case 'run': {
+            const program = parts[1] ? parts[1].toLowerCase() : null;
+            if (!program) {
+                send(client.ws, 'Usage: run <program>', 'error');
+                send(client.ws, 'Available programs: doom, digger', '');
+                break;
+            }
+
+            const bundles = {
+                doom:   'https://js-dos.com/v7/build/test/doom.jsdos',
+                digger: 'https://js-dos.com/v7/build/test/digger.jsdos',
+            };
+
+            if (!bundles[program]) {
+                send(client.ws, `Unknown program: ${program}`, 'error');
+                send(client.ws, 'Available programs: doom, digger', '');
+                break;
+            }
+
+            send(client.ws, '', '');
+            send(client.ws, `Loading ${program.toUpperCase()}...`, 'bright');
+            send(client.ws, 'Initializing WASM x86 emulator...', '');
+            send(client.ws, '', '');
+            client.ws.send(JSON.stringify({ type: 'run-dos', bundle: bundles[program] }));
             break;
         }
 
