@@ -4,9 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Multiplayer Console</title>
-
 <link rel="preload" href="fonts/PerfectDOSVGA437Win.woff2" as="font" type="font/woff2" crossorigin>
-
 <style>
     @font-face {
         font-family: 'Perfect DOS VGA 437 Win';
@@ -15,10 +13,8 @@
         font-weight: normal;
         font-style: normal;
     }
-
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-
     #terminal {
         width: 100%; height: 100%;
         background: #000; color: #aaaaaa;
@@ -31,7 +27,6 @@
         font-smooth: never;
         text-rendering: optimizeSpeed;
     }
-
     #output {
         flex: 1;
         overflow-y: auto;
@@ -40,19 +35,17 @@
         word-break: break-word;
     }
     #output::-webkit-scrollbar { display: none; }
-
     .line { display: block; color: #aaaaaa; line-height: 1; margin-bottom: 6px; }
     .line.bright { color: #ffffff; }
     .line.error  { color: #ff5555; }
     .line.warn   { color: #ffff55; }
-
+    .line.dim    { color: #666666; }
     #input-line {
         display: flex; align-items: center;
         color: #aaaaaa; line-height: 1;
         margin-top: 6px; flex-shrink: 0;
     }
     #prompt { white-space: nowrap; }
-
     #input-field {
         background: transparent; border: none; outline: none;
         color: #aaaaaa;
@@ -68,14 +61,15 @@
     <div id="output"></div>
     <div id="input-line">
         <span id="prompt">C:\CHAT&gt;</span>
-        <input id="input-field" type="text" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" maxlength="200" disabled />
+        <input id="input-field" type="text" autocomplete="off" spellcheck="false"
+               autocorrect="off" autocapitalize="off" maxlength="200" disabled />
     </div>
 </div>
-
 <script>
     const output = document.getElementById('output');
     const inputField = document.getElementById('input-field');
     const promptEl = document.getElementById('prompt');
+    const terminal = document.getElementById('terminal');
 
     let cmdHistory = [];
     let histIndex = -1;
@@ -114,7 +108,10 @@
                 printLine(data.text, data.cls);
             } else if (data.type === 'prompt') {
                 promptEl.textContent = data.text;
-                inputField.type = 'text';
+                if (inputField.type === 'password' &&
+                    !data.text.toLowerCase().includes('password')) {
+                    inputField.type = 'text';
+                }
             } else if (data.type === 'clear') {
                 output.innerHTML = '';
             } else if (data.type === 'authmode') {
@@ -124,19 +121,27 @@
                 } else {
                     inputField.type = 'text';
                 }
+            } else if (data.type === 'color-change') {
+                // Change the normal text color everywhere
+                terminal.style.color = data.color;
+                inputField.style.color = data.color;
+                promptEl.style.color = data.color;
+                // Update existing normal lines too
+                const normalLines = output.querySelectorAll(
+                    '.line:not(.bright):not(.error):not(.warn):not(.dim)'
+                );
+                normalLines.forEach(l => l.style.color = data.color);
             }
         });
 
         socket.addEventListener('close', () => {
             printLine('', '');
-            printLine('[SYSTEM] Connection to server lost. Reconnecting...', 'error');
+            printLine('[SYSTEM] Connection lost. Reconnecting...', 'error');
             inputField.disabled = true;
             setTimeout(connectSocket, 2000);
         });
 
-        socket.addEventListener('error', () => {
-            socket.close();
-        });
+        socket.addEventListener('error', () => socket.close());
     }
 
     function sendInput(text) {
