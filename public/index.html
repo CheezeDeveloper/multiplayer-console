@@ -172,21 +172,22 @@
     // ===================== JS-DOS =====================
    function openDos(bundleUrl) {
     console.log("Loading bundle from:", bundleUrl);
+    
+    const container = document.getElementById('jsdos');
     dosContainer.style.display = 'flex';
     inputField.disabled = true;
 
-    // We use the new Emulators syntax for v7
-    Dos(document.getElementById('jsdos'))
-        .run(bundleUrl)
-        .then((ci) => {
-            console.log("Success!");
-            dosInstance = ci;
-        })
-        .catch((err) => {
-            // THIS WILL TELL US THE TRUTH
-            console.error("The Emulator failed. Error:", err);
-            printLine("ERROR: " + err.message, "error");
-        });
+    // In v7 'latest', the URL goes INSIDE the options object
+    Dos(container, {
+        url: bundleUrl,
+        wasmFolderPath: "https://js-dos.com/v7/build/releases/latest/", // Ensures WASM workers load
+    }).then((ci) => {
+        console.log("DOS Instance loaded successfully");
+        dosInstance = ci;
+    }).catch((err) => {
+        console.error("JS-DOS error:", err);
+        // If you see a 'fetch' error here, the path /doom.jsdos is still 404
+    });
 }
     // ===================== WEBSOCKET =====================
     function connectSocket() {
