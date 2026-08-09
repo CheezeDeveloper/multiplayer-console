@@ -179,7 +179,7 @@ wss.on('connection', async (ws, req) => {
             if (!account) {
                 clientData.nickname = await generateUniqueSessionGuestName();
                 printBanner();
-                send(ws, 'MULTIPLAYER CONSOLE v1.0', 'bright');
+                send(ws, 'MULTIPLAYER CONSOLE v1.02', 'bright');
                 send(ws, '', '');
                 printFooter();
                 sendPrompt(clientData);
@@ -189,7 +189,7 @@ wss.on('connection', async (ws, req) => {
                 clientData.isSiteAdmin = account.isSiteAdmin;
 
                 printBanner();
-                send(ws, 'MULTIPLAYER CONSOLE v1.01', 'bright');
+                send(ws, 'MULTIPLAYER CONSOLE v1.02', 'bright');
                 send(ws, 'MPCMD.EXE loaded successfully.', '');
                 send(ws, '', '');
                 send(ws, `[SYSTEM] New account created: ${account.nickname}`, 'bright');
@@ -218,7 +218,7 @@ wss.on('connection', async (ws, req) => {
             clientData.isSiteAdmin = account.isSiteAdmin;
 
             printBanner();
-            send(ws, 'MULTIPLAYER CONSOLE v1.01', 'bright');
+            send(ws, 'MULTIPLAYER CONSOLE v1.02', 'bright');
             send(ws, '', '');
             send(ws, `[SYSTEM] Welcome back, ${account.nickname}.`, 'bright');
             send(ws, '', '');
@@ -405,8 +405,7 @@ async function handleInput(client, text, ts) {
         return;
     }
 
-    // DOS commands that don't start with /
-    const dosCommands = ['cls', 'dir', 'date', 'time', 'echo', 'ver'];
+    const dosCommands = ['cls', 'dir', 'date', 'time', 'echo', 'ver', 'run'];
     const firstWord = trimmedLower.split(/\s+/)[0];
     const isCommand = text.startsWith('/')
         || trimmedLower.startsWith('connect')
