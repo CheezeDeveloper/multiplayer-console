@@ -4,7 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Multiplayer Console</title>
+
+<link rel="stylesheet" href="https://js-dos.com/v7/build/releases/latest/js-dos.css">
+<script src="https://js-dos.com/v7/build/releases/latest/js-dos.js"></script>
+
 <link rel="preload" href="fonts/PerfectDOSVGA437Win.woff2" as="font" type="font/woff2" crossorigin>
+
 <style>
     @font-face {
         font-family: 'Perfect DOS VGA 437 Win';
@@ -13,11 +18,14 @@
         font-weight: normal;
         font-style: normal;
     }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+
     #terminal {
         width: 100%; height: 100%;
-        background: #000; color: #aaaaaa;
+        background: #000;
+        color: #aaaaaa;
         font-family: 'Perfect DOS VGA 437 Win', monospace;
         font-size: 32px;
         padding: 8px 12px;
@@ -27,6 +35,7 @@
         font-smooth: never;
         text-rendering: optimizeSpeed;
     }
+
     #output {
         flex: 1;
         overflow-y: auto;
@@ -35,46 +44,113 @@
         word-break: break-word;
     }
     #output::-webkit-scrollbar { display: none; }
-    .line { display: block; color: #aaaaaa; line-height: 1; margin-bottom: 6px; }
-    .line.bright { color: #ffffff; }
-    .line.error  { color: #ff5555; }
-    .line.warn   { color: #ffff55; }
-    .line.dim    { color: #666666; }
+
+    /* No hardcoded color — inherits from #terminal */
+    .line { display: block; line-height: 1; margin-bottom: 6px; }
+    .line.bright { color: #ffffff !important; }
+    .line.error  { color: #ff5555 !important; }
+    .line.warn   { color: #ffff55 !important; }
+    .line.dim    { color: #666666 !important; }
+
     #input-line {
         display: flex; align-items: center;
-        color: #aaaaaa; line-height: 1;
-        margin-top: 6px; flex-shrink: 0;
+        line-height: 1; margin-top: 6px; flex-shrink: 0;
     }
     #prompt { white-space: nowrap; }
+
     #input-field {
         background: transparent; border: none; outline: none;
-        color: #aaaaaa;
+        color: inherit;
         font-family: 'Perfect DOS VGA 437 Win', monospace;
         font-size: 32px; line-height: 1;
         caret-color: #aaaaaa;
         flex: 1;
     }
+
+    /* DOS Window */
+    #dos-container {
+        position: fixed;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        width: 640px; height: 420px;
+        border: 4px solid #aaaaaa;
+        background: #000;
+        display: none;
+        z-index: 1000;
+        box-shadow: 0 0 60px rgba(170, 170, 170, 0.3);
+        flex-direction: column;
+    }
+
+    #dos-header {
+        background: #aaaaaa;
+        color: #000;
+        font-family: 'Perfect DOS VGA 437 Win', monospace;
+        font-size: 18px;
+        padding: 2px 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-shrink: 0;
+        user-select: none;
+    }
+
+    #dos-header span.close-btn {
+        cursor: pointer;
+        padding: 0 4px;
+    }
+
+    #dos-header span.close-btn:hover {
+        background: #000;
+        color: #aaaaaa;
+    }
+
+    #jsdos {
+        width: 100%;
+        flex: 1;
+    }
 </style>
 </head>
 <body>
+
 <div id="terminal">
     <div id="output"></div>
     <div id="input-line">
         <span id="prompt">C:\CHAT&gt;</span>
-        <input id="input-field" type="text" autocomplete="off" spellcheck="false"
-               autocorrect="off" autocapitalize="off" maxlength="200" disabled />
+        <input
+            id="input-field"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            autocorrect="off"
+            autocapitalize="off"
+            maxlength="200"
+            disabled
+        />
     </div>
 </div>
+
+<!-- JS-DOS Virtual Monitor Window -->
+<div id="dos-container">
+    <div id="dos-header">
+        <span>JS-DOS WASM MONITOR</span>
+        <span class="close-btn" onclick="closeDos()">[X] CLOSE</span>
+    </div>
+    <div id="jsdos"></div>
+</div>
+
 <script>
-    const output = document.getElementById('output');
+    const output     = document.getElementById('output');
     const inputField = document.getElementById('input-field');
-    const promptEl = document.getElementById('prompt');
-    const terminal = document.getElementById('terminal');
+    const promptEl   = document.getElementById('prompt');
+    const terminal   = document.getElementById('terminal');
+    const dosContainer = document.getElementById('dos-container');
 
     let cmdHistory = [];
-    let histIndex = -1;
-    let socket = null;
+    let histIndex  = -1;
+    let socket     = null;
+    let dosInstance = null;
 
+    // ===================== TERMINAL OUTPUT =====================
     function printLine(text, cls) {
         const div = document.createElement('div');
         div.className = 'line' + (cls ? ' ' + cls : '');
@@ -87,10 +163,38 @@
     function trimLines() {
         const lines = output.querySelectorAll('.line');
         if (lines.length > 300) {
-            for (let i = 0; i < lines.length - 300; i++) output.removeChild(lines[i]);
+            for (let i = 0; i < lines.length - 300; i++) {
+                output.removeChild(lines[i]);
+            }
         }
     }
 
+    // ===================== JS-DOS =====================
+    function openDos(bundleUrl) {
+        dosContainer.style.display = 'flex';
+        inputField.disabled = true;
+
+        Dos(document.getElementById('jsdos')).run(bundleUrl).then((ci) => {
+            dosInstance = ci;
+        }).catch((err) => {
+            printLine('Failed to start DOS emulator: ' + err.message, 'error');
+            closeDos();
+        });
+    }
+
+    function closeDos() {
+        if (dosInstance) {
+            dosInstance.exit();
+            dosInstance = null;
+        }
+        // Clear the jsdos div so next run starts fresh
+        document.getElementById('jsdos').innerHTML = '';
+        dosContainer.style.display = 'none';
+        inputField.disabled = false;
+        inputField.focus();
+    }
+
+    // ===================== WEBSOCKET =====================
     function connectSocket() {
         const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
         socket = new WebSocket(protocol + location.host);
@@ -106,14 +210,17 @@
 
             if (data.type === 'line') {
                 printLine(data.text, data.cls);
+
             } else if (data.type === 'prompt') {
                 promptEl.textContent = data.text;
                 if (inputField.type === 'password' &&
                     !data.text.toLowerCase().includes('password')) {
                     inputField.type = 'text';
                 }
+
             } else if (data.type === 'clear') {
                 output.innerHTML = '';
+
             } else if (data.type === 'authmode') {
                 if (data.enabled) {
                     inputField.type = 'password';
@@ -121,16 +228,13 @@
                 } else {
                     inputField.type = 'text';
                 }
+
             } else if (data.type === 'color-change') {
-                // Change the normal text color everywhere
+                // Change master color — all normal lines inherit from #terminal
                 terminal.style.color = data.color;
-                inputField.style.color = data.color;
-                promptEl.style.color = data.color;
-                // Update existing normal lines too
-                const normalLines = output.querySelectorAll(
-                    '.line:not(.bright):not(.error):not(.warn):not(.dim)'
-                );
-                normalLines.forEach(l => l.style.color = data.color);
+
+            } else if (data.type === 'run-dos') {
+                openDos(data.bundle);
             }
         });
 
@@ -144,6 +248,7 @@
         socket.addEventListener('error', () => socket.close());
     }
 
+    // ===================== INPUT =====================
     function sendInput(text) {
         if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'input', text, ts: Date.now() }));
@@ -163,6 +268,7 @@
             inputField.value = '';
             e.preventDefault();
         }
+
         if (e.key === 'ArrowUp' && inputField.type !== 'password') {
             if (histIndex < cmdHistory.length - 1) {
                 histIndex++;
@@ -170,6 +276,7 @@
             }
             e.preventDefault();
         }
+
         if (e.key === 'ArrowDown' && inputField.type !== 'password') {
             if (histIndex > 0) {
                 histIndex--;
@@ -182,7 +289,12 @@
         }
     });
 
-    document.addEventListener('click', () => inputField.focus());
+    document.addEventListener('click', () => {
+        if (dosContainer.style.display !== 'flex') {
+            inputField.focus();
+        }
+    });
+
     connectSocket();
 </script>
 </body>
